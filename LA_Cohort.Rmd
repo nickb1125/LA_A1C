@@ -1,0 +1,652 @@
+---
+title: "LA_Cohort_RO1"
+author: "Nick R. Bachelder"
+date: "11/15/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(tidyr)
+library(hrbrthemes)
+library(stringr)
+library(randomForest)
+require(dplyr)
+library(MASS)
+library(knitr)
+library(kableExtra)
+library(mvtnorm)
+library(scales)
+library(DT)
+library(readxl)
+library(reshape2)
+library(zoo)
+library(ggcorrplot)
+library(psych)
+library(tidyverse)
+library(here)
+
+setwd(here())
+```
+
+```{r, include = FALSE}
+filenames <- list.files("main_data", pattern="*.xlsx", full.names=TRUE)
+ldf <- lapply(filenames, read_excel, sheet = 6, skip = 6, n_max = 26)
+colnames <- c('Sample Label', 'Wells', 'Sample', 'Sample #', 'Tube #', 'Study ID', 'HgA1c Value', 'TNF-alpha', 'IL-6', 'IL-16' , 'Leptin' , 'IL-15', 'IL-23', 'CXCL1')
+ldf <- lapply(ldf, setNames, colnames)
+cytokines <- data.frame(ldf[[1]])
+i = 1
+print(paste('Dataframe', i, 'done out of', length(ldf)))
+for (index in 2:length(ldf)) {
+  merge_df <- data.frame(ldf[[index]])
+  merge_columns <- intersect(colnames(cytokines), colnames(merge_df))
+  if (length(merge_columns) == 0) {
+    next
+  }
+  cytokines <- merge(cytokines, merge_df, all = T, by = merge_columns)
+  print(paste('Dataframe', i, 'done out of', length(ldf)))
+  i = i + 1
+}
+
+cytokines[cytokines == 'OOR <' | cytokines == 'OOR >'] <- NA
+cytokines[cytokines == 'N' | cytokines == 'NA'] <- NA
+cytokines <- cytokines %>% 
+  mutate_all(funs(str_replace(., "\\*", ""))) 
+
+reorder_cormat <- function(cormat){
+  dd <- as.dist((1-cormat)/2)
+  hc <- hclust(dd)
+  print(hc$order)
+}
+
+cytokines <- cytokines %>% dplyr::select(Study.ID, HgA1c.Value, TNF.alpha, IL.6, IL.16, Leptin, IL.15, IL.23, CXCL1) %>%
+  mutate_at(c('HgA1c.Value', 'TNF.alpha', 'IL.6', 'IL.16', 'Leptin', 'IL.15', 'IL.23', 'CXCL1'), as.numeric) %>% 
+  `colnames<-`(c('study_id', 'HgA1c', 'TNF-alpha', 'IL-6', 'IL-16' , 'Leptin' , 'IL-15', 'IL-23', 'CXCL1'))
+
+cytokines$study_id[!grepl('CHF', cytokines$study_id, fixed =T)] <- paste('CHF_', cytokines$study_id[!grepl('CHF', cytokines$study_id, fixed =T)], sep = '')
+```
+
+```{r}
+# import, rename, and select columns for statitical analysis, filter out  withdrawn subjects
+
+survey_dat <- read_excel('FD Survey Data with 9 digit zip code 04.21.22.xlsx', skip = 1) %>%
+  filter(DOB != 'Pt. Withdrawal') %>%
+  dplyr::rename(study_id = study_id_1, timestamp = general_information_timestamp, Asian = race___1, Black = race___2,
+                Native_American = race___3, Pacific_Islander = race___4, White = race___5, Not_Specified_Race = race___6,
+                Curr_ZIP = 'Current Address', ZIP_at_Time_of_Completion = 'RedCap Address (Address at time of questionnaire completion)',
+                years_at_completion_ZIP = zip_years, us_born = usorn, birth_location = born, years_in_us = us_years, 
+                number_of_children_in_home = kids_cnt, marital_status = marital, income_status = income, education_status = education, work_outside_home = work,
+                non_standard_work_shifts = shift_wrk, health_status = health, family_w_diabetes = dm, first_period_age = menarche, men_status = men_stat,
+                Car_to_get_food = transportation___1, Bus_to_get_food = transportation___2, Metro_to_get_food = transportation___3, 
+                Walk_to_get_food = transportation___4, Bike_to_get_food = transportation___5, Friend_Family_to_get_food = transportation___6,
+                Delivery_to_get_food = transportation___7, Other_to_get_food = transportation___8, vigorous_days_workout = vigorous_days, 
+                vigorous_time_workout = vigorous_time, moderate_days_workout = moderate, moderate_time_workout = moderate_time) %>% 
+  mutate(language_sp = case_when(language == 1 ~ 'English',
+                                 TRUE ~ language_sp),
+         num_races = rowSums(select_(., 'Asian', 'Black', 'Native_American', 'Pacific_Islander', 'White', 'Not_Specified_Race'), na.rm = TRUE),
+         Not_Specified_Race = case_when(num_races == 0 ~ 1,
+                                        TRUE ~ Not_Specified_Race)) %>% 
+  dplyr::select(study_id, DOB, Asian, Black, Native_American, Pacific_Islander, White, 
+                Not_Specified_Race, num_races, ethnicity, language, Curr_ZIP, 
+                years_at_completion_ZIP, us_born, housemates, number_of_children_in_home, marital_status, income_status, education_status, work_outside_home,
+                non_standard_work_shifts, health_status, dad_ed, mom_ed, family_w_diabetes, first_period_age, men_status, Car_to_get_food, Bus_to_get_food,
+                Metro_to_get_food, Walk_to_get_food, Bike_to_get_food, Friend_Family_to_get_food, Delivery_to_get_food, Other_to_get_food, vitamin, 
+                mince, beef, tacos, kfc, sausages, bacon, dressings, oil, eggs, pizza, cheese, fries, beans, chips, pastries, cake, ice_cream, 
+                chocolate, lollies, spreads, pancakes, sports_drinks, soda, milk, bread, tortilla, rice, takeout, sugar, vigorous_days_workout, 
+                vigorous_time_workout, moderate_days_workout, moderate_time_workout, walk_days, walk_time, sitting_time, height, weight, bmi, hga1c)
+# check how many subjects have multiple races listed: N = 8. Criteria: Subjects selected white and native american (N = 4), or white and asian and White (n = 2)
+# or white and black(n = 2). Discuss what to do with this. For now, including these patients as White.
+
+
+survey_dat <- survey_dat %>% mutate_at(c('Asian', 'Black', 'Native_American', 'Pacific_Islander', 'Not_Specified_Race'), 
+                                       ~ case_when(White == 1 ~ 0,
+                                                   TRUE ~ .)) %>% 
+  mutate(num_races = rowSums(select_(., 'Asian', 'Black', 'Native_American', 'Pacific_Islander', 'White', 'Not_Specified_Race'), na.rm = TRUE))
+
+# melt all race columns into 1
+
+survey_dat <- survey_dat %>% pivot_longer(cols = c('Asian', 'Black', 'Native_American', 
+                                                   'Pacific_Islander', 'White', 'Not_Specified_Race'), names_to = 'Race', values_to = 'race_flag') %>%
+  filter(race_flag == 1) %>% dplyr::select(-race_flag, -num_races)
+
+# check how many individuals have multiple meathods of getting food (N = 33)
+
+
+# create column 'Transportation_for_food' with four options, car_only_to_get_food (N = 296), car_and_other_to_get_food (N = 33), or not_car_to_get_food (N = 5) as well as a 'Not Specified' for those who didnt list type (N = 13)
+
+survey_dat <- survey_dat %>% 
+  mutate(num_food_transport = rowSums(select_(., 'Car_to_get_food', 'Bus_to_get_food', 'Metro_to_get_food', 'Walk_to_get_food', 
+                                                           'Bike_to_get_food', 'Friend_Family_to_get_food', 'Delivery_to_get_food', 
+                                                           'Other_to_get_food'), na.rm = TRUE)) %>%
+  mutate(Not_Specified_to_Get_Food = case_when(num_food_transport == 0 ~ 1, 
+                                                            TRUE ~ 0)) %>% 
+  mutate(Transportation_type_for_food = case_when( (Car_to_get_food == 1 & num_food_transport == 1) ~ 'Car Only',
+                                          (Car_to_get_food == 1 & num_food_transport > 1) ~ 'Car and Other',
+                                          (Car_to_get_food == 0 & Not_Specified_to_Get_Food == 0)  ~ 'Car and Other',
+                                          (Not_Specified_to_Get_Food == 1) ~ 'Not Specified',
+                                          TRUE ~ 'What happened?'
+                                          )) %>% 
+           dplyr::select(-c('Car_to_get_food', 'Bus_to_get_food', 'Metro_to_get_food', 'Walk_to_get_food', 
+                                                           'Bike_to_get_food', 'Friend_Family_to_get_food', 'Delivery_to_get_food', 
+                                                           'Other_to_get_food', 'num_food_transport', 'Not_Specified_to_Get_Food'))
+
+# select interesting variables for analysis, ALSO combine food catagories into more broad subgroups
+
+# fatty carbs: pizza, fries, chips, takeout, pastries, cake, pancakes, kfc, tacos
+# red meats: mince, beef, sausages, bacon
+# high sugar products: sports_drinks, soda, sugar, ice_cream, chocolate, lollies, spreads
+# vitamin: vitamin
+# bread: bread, rice, tortilla
+# dairy: eggs, cheese, milk
+
+# remove due to broad health range: -dressings, -beans, -oil
+
+survey_dat <- survey_dat %>% dplyr::select(-c(vigorous_time_workout, marital_status, years_at_completion_ZIP, language, number_of_children_in_home, first_period_age, vigorous_days_workout, moderate_days_workout, moderate_time_workout,
+                                walk_days, walk_time, sitting_time)) %>% mutate(
+                                  weekly_dairy = rowSums(select_(., 'eggs', 'cheese', 'milk'), na.rm = TRUE),
+                                  bread_weekly =  rowSums(select_(., 'bread', 'rice', 'tortilla'), na.rm = TRUE),
+                                  high_sugar_weekly = rowSums(select_(., 'sports_drinks', 'soda', 'sugar', 
+                                                                      'ice_cream', 'chocolate', 'lollies', 'spreads'), na.rm = TRUE),
+                                  red_meats_weekly = rowSums(select_(., 'mince', 'beef', 'sausages', 'bacon'), na.rm = TRUE),
+                                  fatty_carbs_weekly = rowSums(select_(., 'pizza', 'fries', 'chips', 'takeout', 
+                                                                       'pastries', 'cake', 'pancakes', 'kfc', 'tacos'), na.rm = TRUE)) %>%
+  dplyr::select(-c(pizza, fries, chips, takeout, pastries, cake, pancakes, kfc, tacos, mince, beef, sausages, bacon, sports_drinks, soda, 
+                   sugar, ice_cream, chocolate, lollies, spreads, bread, rice, tortilla, eggs, cheese, milk, dressings, beans, oil))
+
+
+
+
+
+#fix dates and binary responses. unfortunetly, there is no more detailed translation from the zip+4 to census tract (need to join to food desert data), so I'm 
+# simplifying the  zip column as well
+
+survey_dat <- survey_dat %>% mutate(DOB = as.Date(as.numeric(DOB), origin = '1899-12-30')) %>%
+  mutate(us_born = case_when(us_born == 1 ~ 1,
+                             us_born == 2 ~ 0),
+         non_standard_work_shifts = case_when(non_standard_work_shifts == 1 ~ 1,
+                                              non_standard_work_shifts == 2 ~ 0),
+         vitamin = case_when(vitamin == 1 ~ 1,
+                             vitamin == 2 ~ 0)) %>%
+  mutate(across(c('us_born', 'work_outside_home', 'non_standard_work_shifts', 'family_w_diabetes', 'vitamin'), as.factor)) %>%
+  mutate(across(c('ethnicity', 'men_status', 'Transportation_type_for_food', 'Race'), as.factor)) %>%
+  mutate(Curr_ZIP = sub("\\-.*", "", Curr_ZIP)) %>% mutate(Curr_ZIP = str_extract(Curr_ZIP, "[[:digit:]]+"))
+
+  
+  
+
+survey_dat <- survey_dat %>% dplyr::select(study_id, Curr_ZIP, DOB, ethnicity, height, weight, bmi,  Race, Transportation_type_for_food, men_status, us_born, 
+                             work_outside_home, non_standard_work_shifts, 
+                             family_w_diabetes, housemates, income_status, 
+                             education_status, health_status, 
+                             weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly) %>%
+  mutate(bmi = weight / (height*0.01)^2)
+
+survey_dat$Race[survey_dat$Race == 'Not_Specified_Race'] <- NA
+survey_dat$Transportation_type_for_food[survey_dat$Transportation_type_for_food == 'Not Specified'] <- NA
+
+# have to change 1 ZIP to NA due to it only being 4 numbers (invalid)
+
+survey_dat <- survey_dat %>% mutate(Curr_ZIP = ifelse(nchar(Curr_ZIP) != 5, NA, Curr_ZIP)) 
+
+cor_surv <- survey_dat %>% select_if(., is.numeric) %>% cor(use = "pairwise.complete.obs", method = 'pearson')
+ggcorrplot(cor_surv, hc.order = TRUE, type = "lower",
+     outline.col = "white")
+```
+
+```{r}
+ChIP <- read_excel('THFa Chips FINAL.xlsx')
+colnames(ChIP) <- c('study_id', 'TNFa_K9ac_ChIP', 'BMI', 'IL6_K9ac_ChIP')
+ChIP <- ChIP %>% dplyr::select(study_id, IL6_K9ac_ChIP, TNFa_K9ac_ChIP)
+ChIP
+```
+
+## combine data frames
+
+```{r}
+df_list <- list(survey_dat, cytokines, ChIP)
+combine_df <- df_list %>% reduce(merge, by='study_id', all = T)
+combine_df <- combine_df 
+
+combine_df
+# check for duplicate study_ids (n = 0)
+# combine_df %>% group_by(study_id) %>% dplyr::summarize(n = n()) %>% filter(n > 1)
+```
+
+## get food desert data frame... assign to each patient based on ZIP
+
+## Use same definition as food desert poster (\>1/2 for urban and \>10 for rural)
+
+## census tract is more detailed than zip...
+
+```{r}
+all_zips <- combine_df$Curr_ZIP[!is.na(combine_df$Curr_ZIP)] 
+crosswalk_zip_to_census <- read_excel('ZIP_TRACT_032019.xlsx')  %>% 
+  dplyr::rename(Curr_ZIP = zip, TRACT = tract) %>%
+  dplyr::select(Curr_ZIP, TRACT) %>% 
+  filter(Curr_ZIP %in% all_zips)
+
+setdiff(all_zips, crosswalk_zip_to_census$Curr_ZIP) # N = 0
+
+FD <- read_excel('FoodAccessResearchAtlasData2019.xlsx', sheet = 3)  
+
+FD <-  FD %>% 
+  dplyr::rename(TRACT = CensusTract) %>%
+  dplyr::select(TRACT, LILATracts_halfAnd10, Pop2010) %>%
+  mutate(FD_POP = LILATracts_halfAnd10*Pop2010)
+
+
+setdiff(crosswalk_zip_to_census$TRACT, FD$TRACT) 
+
+ACS_FD <- left_join(crosswalk_zip_to_census, FD, by = 'TRACT') %>% group_by(Curr_ZIP) %>%
+  dplyr::summarize(Percent_of_tract_in_FD = sum(FD_POP) / sum(Pop2010))
+
+ACS_FD %>% filter(is.na(Percent_of_tract_in_FD))
+
+combine_df1 <- left_join(combine_df, ACS_FD, by = 'Curr_ZIP')
+
+colnames(combine_df1) <- gsub('-', '_', colnames(combine_df1))
+
+combine_df1 %>% filter(is.na(Percent_of_tract_in_FD), !is.na(Curr_ZIP))
+
+combine_df1
+
+cor_df <- cor(combine_df1 %>% dplyr::select(HgA1c, 'TNF_alpha', 'IL_6', 'IL_16', 'Leptin', 
+                                            'IL_15', 'IL_23', 'CXCL1', 'IL6_K9ac_ChIP', 'TNFa_K9ac_ChIP', 
+                                            Percent_of_tract_in_FD), use = "pairwise.complete.obs", method = 'pearson')
+
+ggcorrplot(cor_df, hc.order = TRUE, type = "lower",
+     outline.col = "white")
+```
+### Add ACS
+```{r}
+ACS <- read.csv('County_ACS.csv') %>% 
+  mutate(GEOID = ifelse(nchar(as.character(GEOID)) == 5, as.character(GEOID), paste0('0', as.character(GEOID)))) %>% 
+  filter(Curr_ZIP %in% combine_df1$Curr_ZIP) %>% 
+  dplyr::rename(female_householder_prop = family_type_female_householder_prop, single_prop = family_type_single_prop) %>% 
+  mutate(no_internet_prop = 1 - internet_prop,
+         hs_grad = 1 - over_25_less_than_hs_grad_prop) %>% mutate(Curr_ZIP = as.character(Curr_ZIP)) %>% dplyr::select(-GEOID)
+
+combine_df1 <- combine_df1 %>% left_join(ACS, by = 'Curr_ZIP')
+```
+
+
+
+
+## check for normality of all numeric variables
+
+```{r}
+# Non- acs
+nums <- unlist(lapply(combine_df1, is.numeric), use.names = FALSE) 
+numeric_final <- combine_df1[nums]
+
+get_distrib <- function(var) {
+  ggplot(data = combine_df1, aes_string(x = var)) + geom_histogram()
+}
+
+names(numeric_final) %>% lapply(get_distrib)
+```
+
+#check for normality
+
+```{r}
+## check for normality of each variable:
+get_value_shapiro <- function(x) {
+  shapiro.test(x)$p}
+data.frame(unlist(lapply(numeric_final, get_value_shapiro))) %>% `colnames<-`('p_value') %>% 
+  mutate(p_value = case_when(p_value < 0.05 ~ paste('Non-Normal (p:', as.character(round(p_value, 7)), ')'),
+                             TRUE ~ paste('Normal: (p:', as.character(round(p_value, 7)), ')'))
+         )
+```
+
+### apply box transform to all non-normal cytokine data, square root transform to all ACS
+
+```{r}
+non_normal_cols <- as.vector(unlist(lapply(numeric_final, get_value_shapiro))) < 0.05
+non_normal_ACS <- colnames(numeric_final[,non_normal_cols])[colnames(numeric_final[,non_normal_cols]) %in% names(ACS)]
+non_normal_non_ACS <- colnames(numeric_final[,non_normal_cols])[!(colnames(numeric_final[,non_normal_cols]) %in% names(ACS))]
+
+### Box transform
+
+numeric_transformed <- numeric_final
+
+for (col in non_normal_non_ACS) {
+  x <- as.numeric(numeric_final[,col])
+  x[x == 0] <- 0.000000001
+  box <- boxcox(lm(x ~ 1), plot = F)
+  lambda <- box$x[which.max(box$y)]
+  new_x <- if (lambda == 0) {log(x)} else {(x^lambda - 1)/lambda}
+  numeric_transformed[, paste0(col, '.T')] <- new_x
+}
+
+numeric_transformed <- numeric_transformed %>% dplyr::select(-c(non_normal_non_ACS))
+
+### ACS sqrt transform
+
+for (col in non_normal_ACS) {
+  x <- as.numeric(numeric_final[,col])
+  x[x == 0] <- 0.000000001
+  new_x <- sqrt(x)
+  numeric_transformed[, paste0(col, '.T')] <- new_x
+}
+
+numeric_transformed <- numeric_transformed %>% dplyr::select(-c(non_normal_ACS))
+
+numeric_transformed
+```
+
+```{r}
+get_distrib2 <- function(var) {
+  ggplot(data = numeric_transformed, aes_string(x = var)) + geom_histogram()
+}
+
+names(numeric_transformed) %>% lapply(get_distrib2)
+```
+
+
+### check for linear relationships between independent and dependent variables
+
+```{r}
+check_for_relation <- function(var) {
+  numeric_transformed %>% ggplot(aes_string(x = var, y = 'HgA1c.T')) + geom_point()
+}
+
+names(numeric_transformed)[names(numeric_transformed) != 'HgA1c.T'] %>% lapply(check_for_relation)
+```
+## tranformed df w all variables
+```{r}
+compare_df_tranformed <- cbind(numeric_transformed, combine_df1 %>% select_if(is.factor))
+```
+
+
+
+
+```{r}
+# Note: For ACS data reference file County_ACS_Data_Clean (has been changed to pull zcta instead)
+library(tidyLPA)
+
+
+df_lca_DIS <- numeric_transformed %>%
+  dplyr::select(crowded_prop.T, female_householder_prop.T, pop_non_hispanic_black_prop.T, vehicle_none_prop.T, no_internet_prop.T, public_assistance_prop.T,
+                housing_rental_prop.T,poverty_prop.T, single_prop.T) 
+
+
+results_lca_DIS <- df_lca_DIS %>%
+    estimate_profiles(1:2,
+                      package = 'mclust',
+                      variances = c("varying"),
+                      covariances = c('varying'))
+
+df_lca_ADV <- numeric_transformed %>%
+  dplyr::select(fem_mgmt_prof_prop.T, male_mgmt_prof_prop.T, hs_grad.T) 
+
+
+results_lca_ADV <- df_lca_ADV %>%
+    estimate_profiles(1:3,
+                      package = 'mclust',
+                      variances = c("varying"),
+                      covariances = c('varying'))
+
+get_data(results_lca_DIS) %>% filter(classes_number == 2, Class == Class_prob) %>% group_by(Class) %>%
+  dplyr::summarise(across(everything(), mean)) %>% 
+  dplyr::select(Class, crowded_prop.T, female_householder_prop.T, pop_non_hispanic_black_prop.T, vehicle_none_prop.T, no_internet_prop.T, public_assistance_prop.T,
+                housing_rental_prop.T,poverty_prop.T, single_prop.T) %>% 
+  pivot_longer(cols = c(crowded_prop.T, female_householder_prop.T, pop_non_hispanic_black_prop.T, vehicle_none_prop.T, no_internet_prop.T, public_assistance_prop.T,
+                housing_rental_prop.T,poverty_prop.T, single_prop.T)) %>% 
+  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+  ggtitle('Estimated Mean Parameters for Each Disadvantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+  ylab('Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+get_data(results_lca_ADV) %>% filter(classes_number == 2, Class == Class_prob) %>% group_by(Class) %>%
+  dplyr::summarise(across(everything(), mean)) %>% 
+  dplyr::select(Class, fem_mgmt_prof_prop.T, male_mgmt_prof_prop.T, hs_grad.T) %>% 
+  pivot_longer(cols = c(fem_mgmt_prof_prop.T, male_mgmt_prof_prop.T, hs_grad.T)) %>% 
+  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+  ggtitle('Estimated Mean Parameters for Each Advantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+  ylab('Normalized Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+# lca_all <- ACS %>%
+#   dplyr::select(fem_mgmt_prof_prop, male_mgmt_prof_prop, hs_grad, crowded_prop, female_householder_prop, pop_non_hispanic_black_prop, vehicle_none_prop, no_internet_prop, public_assistance_prop,
+#                 housing_rental_prop,poverty_prop, single_prop)%>%
+#     estimate_profiles(1:2,
+#                       package = 'mclust',
+#                       variances = c("varying"),
+#                       covariances = c('varying'))
+#   
+# 
+# get_data(lca_all) %>% filter(classes_number == 2, Class == Class_prob) %>% group_by(Class) %>%
+#   dplyr::summarise(across(everything(), mean)) %>% 
+#   dplyr::select(Class, fem_mgmt_prof_prop, male_mgmt_prof_prop, hs_grad, crowded_prop, female_householder_prop, pop_non_hispanic_black_prop, vehicle_none_prop, no_internet_prop, public_assistance_prop,
+#                 housing_rental_prop,poverty_prop, single_prop) %>% 
+#   pivot_longer(cols = c(fem_mgmt_prof_prop, male_mgmt_prof_prop, hs_grad, crowded_prop, female_householder_prop, pop_non_hispanic_black_prop, vehicle_none_prop, no_internet_prop, public_assistance_prop,
+#                 housing_rental_prop,poverty_prop, single_prop)) %>% 
+#   ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+#   ggtitle('Estimated Mean Parameters for Each Disadvantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+#   ylab('Normalized Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+dis_class <- get_data(results_lca_DIS) %>% filter(classes_number == 2, Class == Class_prob) %>% 
+  dplyr::select(-c(model_number, classes_number, Class_prob, Probability, id)) %>%
+  dplyr::rename(Class_DIS = Class)
+adv_class <- get_data(results_lca_ADV) %>% filter(classes_number == 2, Class == Class_prob)  %>% 
+  dplyr::select(-c(model_number, classes_number, Class_prob, Probability, id))%>%
+  dplyr::rename(Class_ADV = Class)
+
+compare_df_tranformed <-  compare_df_tranformed %>% left_join(dis_class, by = c('crowded_prop.T', 'female_householder_prop.T', 'pop_non_hispanic_black_prop.T',
+                                                                            'vehicle_none_prop.T',
+                                            'no_internet_prop.T',
+                                            'public_assistance_prop.T',
+                                            'housing_rental_prop.T','poverty_prop.T', 'single_prop.T'))
+compare_df_tranformed <-  compare_df_tranformed %>% left_join(adv_class, by = c('fem_mgmt_prof_prop.T', 'male_mgmt_prof_prop.T', 'hs_grad.T'))
+
+compare_df_tranformed <-  compare_df_tranformed %>% mutate(Class_ADV = as.factor(Class_ADV),
+                                                                          Class_DIS = as.factor(Class_DIS))
+
+compare_df_tranformed <- compare_df_tranformed %>% unique()
+```
+
+```{r}
+# Note: For ACS data reference file County_ACS_Data_Clean (has been changed to pull zcta instead)
+library(tidyLPA)
+
+cyto_lca <- numeric_transformed %>% dplyr::select(TNF_alpha.T, IL_6.T, Leptin.T, IL_15.T, IL_23.T, CXCL1.T)
+
+results_cyto_lca <- cyto_lca %>%
+  data.frame() %>%
+    estimate_profiles(1:5,
+                      package = 'mclust',
+                      variances = c("equal"),
+                      covariances = c('equal'))
+
+
+
+get_data(results_cyto_lca) %>% filter(classes_number == 4, Class == Class_prob) %>% group_by(Class) %>%
+  dplyr::summarise(across(everything(), mean)) %>% 
+  dplyr::select(Class, TNF_alpha.T, IL_6.T, Leptin.T, IL_15.T, IL_23.T, CXCL1.T) %>% 
+  mutate(across(c('TNF_alpha.T', 'IL_6.T', 'Leptin.T', 'IL_15.T', 'IL_23.T', 'CXCL1.T'),   function(x) {scale(x, center = TRUE, scale = TRUE) })) %>%
+  pivot_longer(cols = c(TNF_alpha.T, IL_6.T, Leptin.T, IL_15.T, IL_23.T, CXCL1.T)) %>% 
+  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+  ggtitle('Estimated Mean Parameters for Each Disadvantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+  ylab('Normalized Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+cyto_class <- get_data(results_cyto_lca) %>% filter(classes_number == 4, Class == Class_prob)  %>% 
+  dplyr::select(-c(model_number, classes_number, Class_prob, Probability, id))%>%
+  dplyr::rename(Class_CYTO = Class) %>% mutate(Class_CYTO = as.factor(Class_CYTO))
+
+compare_df_tranformed <-  compare_df_tranformed %>% left_join(cyto_class, by = c('TNF_alpha.T', 'IL_6.T', 'Leptin.T', 'IL_15.T', 'IL_23.T', 'CXCL1.T'))
+
+compare_df_tranformed <- compare_df_tranformed %>% unique()
+```
+
+```{r}
+makeStars <- function(x){
+  stars <- c("⋆⋆⋆⋆", "⋆⋆⋆", "⋆⋆", "⋆", "")
+  vec <- c(0, 0.0001, 0.001, 0.01, 0.05, 1)
+  i <- findInterval(x, vec)
+  stars[i]
+}
+
+
+options(knitr.kable.NA = '')
+
+c <- data.frame(round(corr.test(numeric_transformed)$r, 3))
+
+p <- data.frame(round(corr.test(numeric_transformed)$p,3))
+p_stars <- data.frame(lapply(p, makeStars))
+p_stars_mat <- as.matrix(p_stars)
+p_stars_mat[is.na(p_stars_mat)] <- ''
+p_mat <- as.matrix(p %>% mutate_all(as.character)) 
+p <- data.frame(matrix( paste(p_mat, p_stars_mat, sep=""), 
+        nrow=nrow(p_mat), dimnames=dimnames(p_mat) ))
+
+n <- data.frame(round(corr.test(numeric_transformed)$n,3)) 
+
+colnames(p) <- paste(colnames(p), '_p', sep ='')
+colnames(n) <- paste(colnames(n), '_n', sep ='')
+colnames(c) <- paste(colnames(c), '_c', sep ='')
+
+
+p[upper.tri(p)] <- NA
+n[upper.tri(n)] <- NA
+c[upper.tri(c)] <- NA
+
+combined <- p
+                                                                                                                  
+
+combined %>% 
+  mutate_all(~cell_spec(.x, background = case_when(grepl('⋆⋆⋆⋆', .x) ~ "red",
+                                                   grepl('⋆⋆⋆', .x) ~ "red",
+                                                   grepl('⋆⋆', .x) ~ "yellow",
+                                                   grepl('⋆', .x) ~ "yellow",
+                                                   TRUE ~ "white"))) %>%
+  kbl(booktabs = T, escape = F, caption = "Correlation, Significance, and Sample Size For HgA1c, Cytokine, Survey, and Food Desert Values") %>% kable_classic_2() %>%
+      kable_paper(full_width = F) %>%
+  footnote(symbol = c("Pearson Correlation is used", "Holm-Bonferroni method is used to compute p-values for multiple comparisons"),
+           footnote_as_chunk = T) 
+```
+
+### Elastic Net Modeling
+
+```{r}
+sapply(numeric_transformed, function(y) sum(length(which(is.na(y)))))
+
+modeling_df <- cbind(numeric_transformed %>% scale(), combine_df1 %>% select_if(is.factor))
+
+modeling_df <- modeling_df %>% dplyr::select(HgA1c.T, IL6_K9ac_ChIP.T, TNFa_K9ac_ChIP.T)
+
+modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
+
+modeling_df
+```
+
+```{r}
+library(glmnet)
+## Create modeling data
+X <- modeling_df 
+
+X2 <-  model.matrix(HgA1c.T ~ ., X)
+Y2 <- X$HgA1c.T
+
+
+# Create cv results df
+df1 = data.frame(
+    enum = integer(),
+    alpha = double(),
+    cvm.min = double(),
+    cvm.1se = double(),
+    lambda.min = double(),
+    lambda.1se = double())
+
+  # - select alpha and lambda via CV
+enum = 0
+for (alpha in c(0, 0.01, 0.1, 0.5, 1)) {
+  enum <-  enum + 1
+  fit <-  cv.glmnet(X2, Y2, family='gaussian', alpha=alpha, nfolds = 3)
+  cvm.min <-  fit$cvm[fit$lambda == fit$lambda.min]
+  cvm.1se <-  fit$cvm[fit$lambda == fit$lambda.1se]
+  lambda.min <-  fit$lambda.min
+  lambda.1se <-  fit$lambda.1se
+  
+  assign(paste("fit", enum, sep=""), fit)
+  
+  df1_temp <-  data.frame(enum, alpha, cvm.min, cvm.1se, lambda.min, lambda.1se)
+  
+  df1 <-  rbind(df1, df1_temp) }
+
+# - select model that minimizes CV error
+best.model <-  df1[df1$cvm.min==min(df1$cvm.min),]
+best.fit   <-  get(paste('fit', best.model$enum, sep=''))
+
+# extract non-zero coefficients from best model
+coef  <-  coef(best.fit, s=best.fit$lambda.min) ## uses lowest mse lambda
+coef2 <- coef(best.fit, s=best.fit$lambda.1se) ## uses 1 se larger from lowest mse lambda (recomended for more regularization)
+
+coef <-  data.frame(
+  vars   = coef@Dimnames[[1]][ which(coef != 0 ) ], 
+  val     = coef              [ which(coef != 0 ) ] )
+
+
+plot_min <- coef %>%
+  dplyr::rename('row' = 'vars', 'value' = 'val') %>%
+  ggplot(aes(value, reorder(row, value), color = value > 0.001)) +
+  geom_point(show.legend = FALSE) +
+  ggtitle("Influential variables") +
+  xlab("Coefficient") +
+  ylab(NULL)
+
+most_sig <- coef %>% filter(abs(val) %in% tail(sort(abs(coef$val)), 10) )
+
+plot_most_sig <- most_sig %>%
+  dplyr::rename('row' = 'vars', 'value' = 'val') %>%
+  ggplot(aes(value, reorder(row, value), color = value > 0)) +
+  geom_point(show.legend = FALSE) +
+  ggtitle("Top 10 Most Influential variables") +
+  xlab("Coefficient") +
+  ylab(NULL)
+
+coef <- coef  %>% mutate(val = round(val, 6)) 
+
+return_this <- c()
+
+return_this$df1 <- df1
+return_this$plot_min <- plot_min
+return_this$coef <- coef %>% arrange(desc(val))
+
+return_this
+```
+
+```{r}
+modeling_df <- numeric_transformed %>% dplyr::select(HgA1c.T, Percent_of_tract_in_FD.T)
+
+modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
+
+nrow(modeling_df)
+
+summary(lm(HgA1c.T ~ ., modeling_df))
+```
+
+### Cohort Diagram
+
+```{r}
+cohort_df <- cbind(numeric_final, combine_df1 %>% select_if(is.factor))
+library(gtsummary)
+
+cohort_df %>% 
+  tbl_summary(missing = "ifany",
+              missing_text = "N missing",
+              type = all_continuous() ~ "continuous2",
+              statistic = all_continuous() ~ c("{median} ({p25}, {p75})",
+                                               "{min}, {max}"))
+```
+
+```{r}
+save.image(file = "analysis_prep.RData")
+```
