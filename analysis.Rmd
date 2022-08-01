@@ -2,16 +2,14 @@
 title: "analyisis_la_r01"
 author: "Nick R. Bachelder"
 date: '2022-07-13'
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_float: true
 ---
-
-/Users/nickbachelder/Desktop/Duke Internship 2021/LA_Cohort_R01/LA_A1C
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.align="center")
-
-setwd(here())
-
 load(file = "analysis_prep.RData")
 
 library(dplyr)
@@ -40,10 +38,12 @@ library(bstfun)
 library(MplusAutomation)
 library(tidyLPA)
 library(gridExtra)
+setwd(here())
+
 ```
 
 
-## Data Cleaning Comments:
+# Section: Data Cleaning Comments
 * Selected variables include **all cytokines, both CHiP variables, ZIP codes, the food desert variable**, and those **survey variables** which were convenient for modeling. All variables are summarized below.
 * Dietary weekly consumption variables (ie. servings of oil, tacos, etc) were grouped into more broad catagories (Surgar, Red Meats, Fatty Carbs, Dairy, Breads)
 
@@ -62,8 +62,8 @@ library(gridExtra)
 * Box-cox transformations was used on ALL variables are shapiro-wilk tests accepted non-normality alternative hypothesis for all variables.
 * Only select models were tests due to (1) scatter plots with A1C failing to show linear relationships needed to satisfy assumptions of linear models and (2) overlap of patients between CHiP data, survey data, and ZIP code included data was limited, with fully complete patient observations being only n= 11 out of total N = 411.
 
+# Section: Variable Summary
 
-## Summarize Variables:
 * Looks as though many variables are skewed and non-normal.
 ```{r}
 cohort_df %>% dplyr::select(-c(men_status, ethnicity)) %>%
@@ -77,132 +77,19 @@ cohort_df %>% dplyr::select(-c(men_status, ethnicity)) %>%
   bstfun::add_sparkline(type = "histogram")
 ```
 
-## Dietary LCA:
-* To see the profiles of dietary groups, LCA was attempted on the 5 catagories of food consumption.
-* Groups were best divided into 3 latent groups (by lowest BIC), and it seems that each class eats progressively more servings of everything. This raises questions about whether or not survey diet data is accurate, or if different individuals have different ideas of serving scales, causing such variation and latent group consistancy.
-* To check whether survey data is actually accurate, multiple hypothesis testing was preformed on each latent group with the idea that the groups that consumed more should be significantly associated with higher weight and groups that consumed less with lower weight. Such **hypothesis tests showed latent class association with A1C, weight, and BMI**.
+## Variable Correlation {.tabset}
 
-```{r}
-df_lca <- cohort_df %>%
-  filter(complete.cases(weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly))
+### Heatmap Correlation
 
+```{r, fig.width=15, fig.height=16}
+corr_r <- cor(numeric_transformed, use = "pairwise.complete.obs", method = 'pearson')
 
-results_lca <- df_lca %>% dplyr::select(weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly) %>%
-    estimate_profiles(1:5,
-                      package = 'MplusAutomation',
-                      variances = c("varying"),
-                      covariances = c('varying'))
-
-get_data(results_lca) %>% filter(classes_number == 3, Class == Class_prob) %>% group_by(Class) %>%
-  dplyr::summarise(across(everything(), mean)) %>% 
-  dplyr::select(Class, weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly) %>% 
-  pivot_longer(cols = c(weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly)) %>% 
-  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
-  ggtitle('Estimated Mean Parameters for Each Dietary Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
-  ylab('Mean Serving Consumption Weekly') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-```
-
-
-
-
-```{r}
-lca_corr <- get_data(results_lca) %>% filter(classes_number == 3, Class == Class_prob) %>% 
-  dplyr::select(Class, weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly)
-
-lca_corr <- df_lca %>% left_join(lca_corr, by = c('weekly_dairy', 'bread_weekly', 'high_sugar_weekly', 'red_meats_weekly', 'fatty_carbs_weekly')) %>% 
-  dplyr::select(HgA1c, weight, bmi, Class) %>% filter(complete.cases(.)) %>%
-  mutate(Class = as.factor(Class))
-
-
-tibble(outcome = c("weight", "HgA1c", "bmi")) %>%
-  rowwise() %>%
-  mutate(
-    tbl = 
-      lm(str_glue("{outcome} ~ Class"), data = lca_corr) %>%
-      tbl_regression() %>%
-      add_significance_stars(
-        hide_se = TRUE,
-        hide_ci = FALSE
-      ) %>%
-      list()
-  ) %>%
-  # pull tbl_regression() objects into single merged table
-  pull(tbl) %>%
-  tbl_merge(tab_spanner = c("**Weight**", "**A1C**", "**BMI**")) %>%
-  # add table captions
-  as_gt() %>%
-  gt::tab_header(title = "Table 1. Latent Class Association")
-```
-## ACS LCA:
-* To see the profiles of dietary groups, LCA was attempted on the advantage and disadvantage variables as done in previous work.
-* Association with advantage latent class is almost significant. 
-
-```{r}
-get_data(results_lca_DIS) %>% filter(classes_number == 2, Class == Class_prob) %>% group_by(Class) %>%
-  dplyr::summarise(across(everything(), mean)) %>% 
-  dplyr::select(Class, crowded_prop.T, female_householder_prop.T, pop_non_hispanic_black_prop.T, vehicle_none_prop.T, no_internet_prop.T, public_assistance_prop.T,
-                housing_rental_prop.T,poverty_prop.T, single_prop.T) %>% 
-  pivot_longer(cols = c(crowded_prop.T, female_householder_prop.T, pop_non_hispanic_black_prop.T, vehicle_none_prop.T, no_internet_prop.T, public_assistance_prop.T,
-                housing_rental_prop.T,poverty_prop.T, single_prop.T)) %>% 
-  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
-  ggtitle('Estimated Mean Parameters for Each Disadvantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
-  ylab('Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-get_data(results_lca_ADV) %>% filter(classes_number == 2, Class == Class_prob) %>% group_by(Class) %>%
-  dplyr::summarise(across(everything(), mean)) %>% 
-  dplyr::select(Class, fem_mgmt_prof_prop.T, male_mgmt_prof_prop.T, hs_grad.T) %>% 
-  pivot_longer(cols = c(fem_mgmt_prof_prop.T, male_mgmt_prof_prop.T, hs_grad.T)) %>% 
-  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
-  ggtitle('Estimated Mean Parameters for Each Advantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
-  ylab('Normalized Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-modeling_df <- compare_df_tranformed
-  
-modeling_df <- modeling_df %>% dplyr::select(HgA1c.T , Class_ADV, Class_DIS)
-
-modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
-
-mod4 <- lm(HgA1c.T ~ ., modeling_df)
-mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4))
-```
-
-## Cytokine LCA
-
-```{r}
-get_data(results_cyto_lca) %>% filter(classes_number == 4, Class == Class_prob) %>% group_by(Class) %>%
-  dplyr::summarise(across(everything(), mean)) %>% 
-  dplyr::select(Class, TNF_alpha.T, IL_6.T, Leptin.T, IL_15.T, IL_23.T, CXCL1.T) %>% 
-  mutate(across(c('TNF_alpha.T', 'IL_6.T', 'Leptin.T', 'IL_15.T', 'IL_23.T', 'CXCL1.T'),   function(x) {scale(x, center = TRUE, scale = TRUE) })) %>%
-  pivot_longer(cols = c(TNF_alpha.T, IL_6.T, Leptin.T, IL_15.T, IL_23.T, CXCL1.T)) %>% 
-  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
-  ggtitle('Estimated Mean Parameters for Each Cytokine Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
-  ylab('Normalized Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-modeling_df <- compare_df_tranformed
-  
-modeling_df <- modeling_df %>% dplyr::select(HgA1c.T , Class_CYTO)
-
-modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
-
-mod4 <- lm(HgA1c.T ~ ., modeling_df)
-mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4))
-```
-
-
-
-## Heatmap correlations of survey data and heatmap associations of cytokines, CHiP, and food desert.
-```{r}
-ggcorrplot(cor_df, hc.order = TRUE, type = "lower",
-     outline.col = "white")
-ggcorrplot(cor_surv, hc.order = TRUE, type = "lower",
+ggcorrplot(corr_r, hc.order = TRUE, type = "lower",
      outline.col = "white")
 ```
 
-# Check significance of above correlations. Yellow is significant and red is extremely significant.
+### Significance
+
 ```{r}
 combined %>% 
   mutate_all(~cell_spec(.x, background = case_when(grepl('⋆⋆⋆⋆', .x) ~ "red",
@@ -216,9 +103,13 @@ combined %>%
            footnote_as_chunk = T) 
 ```
 
-## For modeling, check the distributions of dependent and A1C variables.
+## {-}
+
+## Variable Distributions {.tabset}
 * Seem non-normal and non-symetric, consider transformation.
 
+
+### Non-ACS
 ```{r}
 combine_df_non_ACS <- combine_df1[,1:34]
 combine_df_ACS <- combine_df1[,35:ncol(combine_df1)]
@@ -235,6 +126,7 @@ nCol <- floor(sqrt(n))
 do.call("grid.arrange", c(l, ncol=nCol))
 ```
 
+### ACS
 ```{r}
 l <- list()
 i = 1
@@ -249,8 +141,10 @@ do.call("grid.arrange", c(l, ncol=nCol))
 ```
 
 
-## Check normality of dependent variables using Wilk-Shapiro tests.
-***  All variables are non-normal. We will box transform.
+## {-}
+
+## Variable Normality: Wilk-Shapiro
+* All variables are non-normal. We will box transform.
 ```{r}
 ## check for normality of each variable:
 get_value_shapiro <- function(x) {
@@ -263,8 +157,11 @@ data.frame(unlist(lapply(numeric_final, get_value_shapiro))) %>% `colnames<-`('p
 ```
 
 
-## Natural log tranform for non-ACS, square root for ACS - now recheck for data symmetry
+## Variable Transform {.tabset}
+* Box-Cox tranform for non-ACS, square root for ACS - now recheck for data symmetry {.tabset}
 * Looks much more symetric and closer to normal
+
+### Non-ACS
 
 ```{r}
 combine_df_non_ACS_T <- numeric_transformed[,1:23]
@@ -282,6 +179,7 @@ nCol <- floor(sqrt(n))
 do.call("grid.arrange", c(l, ncol=nCol))
 ```
 
+### ACS
 ```{r}
 l <- list()
 i = 1
@@ -295,8 +193,250 @@ nCol <- floor(sqrt(n))
 do.call("grid.arrange", c(l, ncol=nCol))
 ```
 
-## Check for linear association among variables to select modeling variables
+
+
+# Section: LCA: Dietary, Cytokine, ACS
+
+## Latent Component Analysis and Class Association with A1c, Weight, and BMI{.tabset}
+
+### Dietary LCA
+* To see the profiles of dietary groups, LCA was attempted on the 5 catagories of food consumption.
+* Groups were best divided into 3 latent groups (by lowest BIC), and it seems that each class eats progressively more servings of everything. This raises questions about whether or not survey diet data is accurate, or if different individuals have different ideas of serving scales, causing such variation and latent group consistancy.
+* To check whether survey data is actually accurate, multiple hypothesis testing was preformed on each latent group with the idea that the groups that consumed more should be significantly associated with higher weight and groups that consumed less with lower weight. Such **results yield odd results, as eating more servings is associated with LOWER weight and BMI.**. For this reason, **we should be cautious in trusting these self reported serving values as they may be on inconsistent scales.**
+
+```{r}
+df_lca <- numeric_final 
+
+df_lca_diet <- df_lca %>%
+  filter(complete.cases(weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly)) 
+
+
+results_lca <- df_lca_diet %>% dplyr::select(weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly) %>% 
+    estimate_profiles(1:3,
+                      package = 'MplusAutomation',
+                      variances = c("varying"),
+                      covariances = c('varying'))
+
+get_data(results_lca) %>% filter(classes_number == 3, Class == Class_prob) %>% unique() %>% group_by(Class)  %>%
+  dplyr::summarise(across(everything(), mean)) %>% 
+  dplyr::select(Class, weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly) %>% 
+  pivot_longer(cols = c(weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly)) %>% 
+  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+  ggtitle('Estimated Mean Parameters for Each Dietary Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+  ylab('Mean Serving Consumption Weekly') + theme(text = element_text(size=9)) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+
+```{r}
+lca_corr <- get_data(results_lca) %>% filter(classes_number == 3, Class == Class_prob) %>% unique() %>%
+  dplyr::select(Class, weekly_dairy, bread_weekly, high_sugar_weekly, red_meats_weekly, fatty_carbs_weekly) 
+
+lca_corr <- df_lca %>% left_join(lca_corr, by = c('weekly_dairy', 'bread_weekly', 'high_sugar_weekly', 'red_meats_weekly', 'fatty_carbs_weekly')) %>% 
+  dplyr::select(HgA1c, weight, bmi, Class) %>% filter(complete.cases(.)) %>%
+  mutate(Class = as.factor(Class))
+
+
+tibble(outcome = c("weight", "HgA1c", "bmi")) %>%
+  rowwise() %>%
+  mutate(
+    tbl = 
+      lm(str_glue("{outcome} ~ Class"), data = lca_corr) %>%
+      tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4)) %>%
+      add_significance_stars(
+        hide_se = TRUE,
+        hide_ci = FALSE
+      ) %>%
+      list()
+  ) %>%
+  # pull tbl_regression() objects into single merged table
+  pull(tbl) %>%
+  tbl_merge(tab_spanner = c("**Weight**", "**A1C**", "**BMI**")) %>%
+  # add table captions
+  as_gt() %>%
+  gt::tab_header(title = "Table 1. Latent Class Association")
+```
+### ACS Advantage LCA
+* To see the profiles of dietary groups, LCA was attempted on the advantage and disadvantage variables as done in previous work.
+* *High dvantage latent classis associated with lower A1C, lower weight*
+
+```{r}
+df_lca <- numeric_transformed 
+colnames(df_lca) <- gsub('.T', '_T', colnames(numeric_transformed))
+
+df_lca_ADV <- df_lca %>%
+  filter(complete.cases(fem_mgmt_prof_prop_T, male_mgmt_prof_prop_T, hs_grad_T)) 
+
+
+
+
+results_lca_ADV <- df_lca_ADV %>%
+  dplyr::select(fem_mgmt_prof_prop_T, male_mgmt_prof_prop_T, hs_grad_T) %>%
+    estimate_profiles(1:3,
+                      package = 'mclust',
+                      variances = c("varying"),
+                      covariances = c('varying'))
+
+
+
+get_data(results_lca_ADV) %>% filter(classes_number == 2, Class == Class_prob) %>% unique() %>% group_by(Class) %>%
+  dplyr::summarise(across(everything(), mean)) %>% 
+  dplyr::select(Class, fem_mgmt_prof_prop_T, male_mgmt_prof_prop_T, hs_grad_T) %>% 
+  pivot_longer(cols = c(fem_mgmt_prof_prop_T, male_mgmt_prof_prop_T, hs_grad_T)) %>% 
+  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+  ggtitle('Estimated Mean Parameters for Each Advantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+  ylab('Mean') + theme(text = element_text(size=9)) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+lca_corr <- get_data(results_lca_ADV) %>% filter(classes_number == 2, Class == Class_prob) %>% unique()  %>% 
+  dplyr::select(Class, fem_mgmt_prof_prop_T, male_mgmt_prof_prop_T, hs_grad_T)
+lca_corr <- df_lca_ADV %>% left_join(lca_corr, by = c('fem_mgmt_prof_prop_T', 'male_mgmt_prof_prop_T', 'hs_grad_T')) %>% 
+  dplyr::select(HgA1c_T, bmi_T, weight_T, Class) %>% filter(complete.cases(.)) %>%
+  mutate(Class = as.factor(Class))
+
+tibble(outcome = c("HgA1c_T", "weight_T", "bmi_T")) %>%
+  rowwise() %>%
+  mutate(
+    tbl = 
+      lm(str_glue("{outcome} ~ Class"), data = lca_corr) %>%
+      tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4)) %>%
+      add_significance_stars(
+        hide_se = TRUE,
+        hide_ci = FALSE
+      ) %>%
+      list()
+  ) %>%
+  # pull tbl_regression() objects into single merged table
+  pull(tbl) %>%
+  tbl_merge(tab_spanner = c("**A1C**", "**Weight**", "**BMI**")) %>%
+  # add table captions
+  as_gt() %>%
+  gt::tab_header(title = "Table 1. Latent Class Association")
+```
+### ACS Disadvantage LCA
+* *Confusingly, higher disadvantage latent class is associated with lower A1c* 
+
+```{r}
+df_lca_DIS <- df_lca %>%
+  filter(complete.cases(crowded_prop_T, female_householder_prop_T, pop_non_hispanic_black_prop_T, vehicle_none_prop_T, no_internet_prop_T, public_assistance_prop_T,
+                housing_rental_prop_T,poverty_prop_T, single_prop_T)) 
+
+results_lca_DIS <- df_lca_DIS %>%
+  dplyr::select(crowded_prop_T, female_householder_prop_T, pop_non_hispanic_black_prop_T, vehicle_none_prop_T, no_internet_prop_T, public_assistance_prop_T,
+                housing_rental_prop_T,poverty_prop_T, single_prop_T) %>%
+    estimate_profiles(1:2, 
+                      package = 'mclust',
+                      variances = c("varying"),
+                      covariances = c('varying'))
+
+get_data(results_lca_DIS) %>% filter(classes_number == 2, Class == Class_prob) %>% unique() %>% group_by(Class) %>%
+  dplyr::summarise(across(everything(), mean)) %>% 
+  dplyr::select(Class, crowded_prop_T, female_householder_prop_T, pop_non_hispanic_black_prop_T, vehicle_none_prop_T, no_internet_prop_T, public_assistance_prop_T,
+                housing_rental_prop_T,poverty_prop_T, single_prop_T) %>% 
+  pivot_longer(cols = c(crowded_prop_T, female_householder_prop_T, pop_non_hispanic_black_prop_T, vehicle_none_prop_T, no_internet_prop_T, public_assistance_prop_T,
+                housing_rental_prop_T,poverty_prop_T, single_prop_T)) %>% 
+  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+  ggtitle('Estimated Mean Parameters for Each Disadvantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+  ylab('Mean') + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+lca_corr <- get_data(results_lca_DIS) %>% filter(classes_number == 2, Class == Class_prob) %>% unique()  %>% 
+  dplyr::select(Class, crowded_prop_T, female_householder_prop_T, pop_non_hispanic_black_prop_T, vehicle_none_prop_T, no_internet_prop_T, public_assistance_prop_T,
+                housing_rental_prop_T,poverty_prop_T, single_prop_T)
+lca_corr <- df_lca_DIS %>% left_join(lca_corr, by = c('crowded_prop_T', 'female_householder_prop_T', 'pop_non_hispanic_black_prop_T', 
+                                                      'vehicle_none_prop_T', 'no_internet_prop_T', 'public_assistance_prop_T',
+                                                      'housing_rental_prop_T','poverty_prop_T', 'single_prop_T')) %>% 
+  dplyr::select(HgA1c_T, bmi_T, weight_T, Class) %>% filter(complete.cases(.)) %>%
+  mutate(Class = as.factor(Class))
+
+tibble(outcome = c("HgA1c_T", "weight_T", "bmi_T")) %>%
+  rowwise() %>%
+  mutate(
+    tbl = 
+      lm(str_glue("{outcome} ~ Class"), data = lca_corr) %>%
+      tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4)) %>%
+      add_significance_stars(
+        hide_se = TRUE,
+        hide_ci = FALSE
+      ) %>%
+      list()
+  ) %>%
+  # pull tbl_regression() objects into single merged table
+  pull(tbl) %>%
+  tbl_merge(tab_spanner = c("**A1C**", "**Weight**", "**BMI**")) %>%
+  # add table captions
+  as_gt() %>%
+  gt::tab_header(title = "Table 1. Latent Class Association")
+```
+
+
+### Cytokine LCA 
+* *Latent classes with inflated citokine values are associated with increased BMI and weight* 
+
+```{r}
+df_lca_cyto <- df_lca %>%
+  filter(complete.cases(TNF_alpha_T, IL_6_T, Leptin_T, IL_15_T, IL_23_T, CXCL1_T)) 
+
+results_cyto_lca <- df_lca_cyto %>%
+  dplyr::select(TNF_alpha_T, IL_6_T, Leptin_T, IL_15_T, IL_23_T, CXCL1_T) %>%
+    estimate_profiles(3, 
+                      package = 'MPlusAutomation',
+                      variances = c("varying"),
+                      covariances = c('varying'))
+
+get_data(results_cyto_lca) %>% filter(classes_number == 3) %>% unique()  %>% group_by(Class) %>%
+  dplyr::summarise(across(everything(), mean)) %>% 
+  dplyr::select(Class, TNF_alpha_T, IL_6_T, Leptin_T, IL_15_T, IL_23_T, CXCL1_T) %>% 
+  mutate(across(c('TNF_alpha_T', 'IL_6_T', 'Leptin_T', 'IL_15_T', 'IL_23_T', 'CXCL1_T'),   function(x) {scale(x, center = TRUE, scale = TRUE) })) %>%
+  pivot_longer(cols = c(TNF_alpha_T, IL_6_T, Leptin_T, IL_15_T, IL_23_T, CXCL1_T)) %>% 
+  ggplot(aes(x = name, y = value, group = Class, fill = as.factor(Class))) + geom_bar(position = 'dodge', stat = 'identity') + 
+  ggtitle('Estimated Mean Parameters for Each Disadvantage Latent Cluster') + scale_fill_discrete(name = 'Latent Cluster') + 
+  ylab('Normalized Mean') + xlab('Spatial Outcome') + theme(text = element_text(size=9)) + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+lca_corr <- get_data(results_cyto_lca) %>% filter(classes_number == 3) %>% unique()  %>% 
+  dplyr::select(Class, TNF_alpha_T, IL_6_T, Leptin_T, IL_15_T, IL_23_T, CXCL1_T)
+
+lca_corr <- df_lca %>% left_join(lca_corr, by = c('TNF_alpha_T', 'IL_6_T', 'Leptin_T', 'IL_15_T', 'IL_23_T', 'CXCL1_T')) %>% 
+  dplyr::select(HgA1c_T, bmi_T, weight_T, Class) %>% filter(complete.cases(.)) %>%
+  mutate(Class = as.factor(Class))
+
+
+tibble(outcome = c("HgA1c_T", "weight_T", "bmi_T")) %>%
+  rowwise() %>%
+  mutate(
+    tbl = 
+      lm(str_glue("{outcome} ~ Class"), data = lca_corr) %>%
+      tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4)) %>%
+      add_significance_stars(
+        hide_se = TRUE,
+        hide_ci = FALSE
+      ) %>%
+      list()
+  ) %>%
+  # pull tbl_regression() objects into single merged table
+  pull(tbl) %>%
+  tbl_merge(tab_spanner = c("**A1C**", "**Weight**", "**BMI**")) %>%
+  # add table captions
+  as_gt() %>%
+  gt::tab_header(title = "Table 1. Latent Class Association")
+```
+
+
+## {-}
+
+
+
+
+## {-}
+
+# Section: A1c Models
+
+## Check for linear association among variables with A1c to select modeling variables {.tabset}
+
 * Potential continuous variables with linear relationship with AIC inlude **CXCL1, Food Desert Percentage, Health Status, IL6_K9ac_ChIP, hs_grad and TNFa_K9ac_Chip**. We will also attempt to include factor variables **family_w_diabetes, Race, and Transportation_type_for_food, and ACS latent classes**
+
+### Non-ACS
 ```{r}
 combine_df_non_ACS_T <- numeric_transformed[,1:23]
 combine_df_ACS_T <- numeric_transformed[,c(13, 34:ncol(numeric_transformed))]
@@ -313,6 +453,7 @@ nCol <- 5
 do.call("grid.arrange", c(l, ncol=nCol))
 ```
 
+### ACS
 ```{r}
 l <- list()
 i = 1
@@ -326,24 +467,26 @@ nCol <- 5
 do.call("grid.arrange", c(l, ncol=nCol))
 ```
 
-## Issue: 
-* There are only 11 patients with interesting selected continuous variables (CXCL1, Food Desert Percentage, Health Status, IL6_K9ac_ChIP, and TNFa_K9ac_Chip) with no missing values. We will need to break up models. 
+## {-}
 
-  * Model 1: A1C ~ Percent_of_tract_in_FD.T + CXCL1 + family_w_diabetes + Transportation_type_for_food (N = 94)
-  * Model 2: A1C ~ IL6_K9ac_ChIP + TNFa_K9ac_Chip (N = 17)
-  * Model 3: A1C ~ us_born + Race (N = 155)
-  * Model 4: A1C ~ All ACS variables (N = 165)
-  * Model 5: A1C ~ TNF_alpha.T + Leptin.T (N = 154)
+## A1c Modeling Strategy {.tabset} 
+* Issue: There are only 11 patients with interesting selected continuous variables (CXCL1, Food Desert Percentage, Health Status, IL6_K9ac_ChIP, and TNFa_K9ac_Chip) with no missing values. We will need to break up models. 
+
+  * Model 1: BMI ~ Percent_of_tract_in_FD.T + CXCL1 + family_w_diabetes + Transportation_type_for_food (N = 94)
+  * Model 2: BMI ~ IL6_K9ac_ChIP + TNFa_K9ac_Chip (N = 17)
+  * Model 3: BMI ~ us_born + Race (N = 155)
+  * Model 4: BMI ~ All ACS variables (N = 165)
+  * Model 5: BMI ~ TNF_alpha.T + Leptin.T (N = 154)
   * **NOTE: For better modeling, maybe we can discuss getting updated cytokynes measures for patients to increase sample sizes**
 
-## Model 1: 
-* Percent of Tract in Food Desert and Family w Diabetes are significant despite small coefficients. 
+### Model 1
+* Percent of Tract in Food Desert and Family w Diabetes are significant . 
 
 ```{r}
 library(purrr)
 modeling_df <-compare_df_tranformed
   
-modeling_df <- modeling_df %>% dplyr::select(HgA1c.T, Percent_of_tract_in_FD.T, CXCL1.T, family_w_diabetes, 
+modeling_df <- modeling_df %>% dplyr::select(HgA1c.T , Percent_of_tract_in_FD.T, CXCL1.T, family_w_diabetes, 
                                              Transportation_type_for_food)
 
 modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
@@ -351,7 +494,7 @@ modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
 mod4 <- lm(HgA1c.T ~ ., modeling_df)
 mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4))
 ```
-## Model 2: 
+### Model 2
 * TNFa_K9ac_ChIP significant
 * As a note, there is strong positive correlation between the two chip variables, so consider elaster net on this model to reduce multicollinearity concern and introduce regularization.
 
@@ -365,7 +508,7 @@ mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 3))
 ```
 
 
-## Model 3: 
+### Model 3
 * None significant in this cohort
 
 ```{r}
@@ -377,7 +520,7 @@ mod4 <- lm(HgA1c.T ~ Race + us_born, modeling_df)
 mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 3))
 ```
 
-## Model 4: 
+### Model 4: 
 * None independently significant despite significance of latent class for ACS
 
 ```{r}
@@ -385,12 +528,12 @@ modeling_df <- combine_df_ACS_T
 
 modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
 
-mod4 <- lm(HgA1c.T ~ ., modeling_df)
+mod4 <- lm(HgA1c.T~ ., modeling_df)
 mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 3))
 ```
 
 
-# Model 5
+### Model 5
 *None-Significant as implied by scatter plots and lack of linear trends
 
 ```{r}
@@ -405,10 +548,8 @@ mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4))
 ```
 
 
-
-
-## Elastic Net Model 2: 
-* Both CHiPs are selected in elastic net model, but both coeficients are shrunk to be very small compared to the intercept.
+### Elastic Net Model 2
+* Completed to cope with multicolinearity. Both CHiPs are selected in elastic net model, but both coeficients are shrunk to be very small compared to the intercept.
 
 ```{r}
 library(glmnet)
@@ -459,14 +600,14 @@ coef2 <- coef(best.fit, s=best.fit$lambda.1se) ## uses 1 se larger from lowest m
 
 coef <-  data.frame(
   vars   = coef@Dimnames[[1]][ which(coef != 0 ) ], 
-  val     = coef              [ which(coef != 0 ) ] )
+  val     = coef              [ which(coef != 0 ) ] ) %>% filter(vars != '(Intercept)')
 
 
 plot_min <- coef %>%
   dplyr::rename('row' = 'vars', 'value' = 'val') %>%
   ggplot(aes(value, reorder(row, value), color = value > 0.001)) +
   geom_point(show.legend = FALSE) +
-  ggtitle("Influential variables") +
+  ggtitle("Selected Elastic-Net Influential Variables (Intercept Omitted)") +
   xlab("Coefficient") +
   ylab(NULL)
 
@@ -491,19 +632,140 @@ return_this$coef <- coef %>% arrange(desc(val))
 return_this$plot_min
 ```
 
+## {-}
 
-## Food desert vs A1C map 
-* Across LA county
+# Section: BMI models
+* Note: Notice that many of the variables are associated with BMI but not A1c. For this reason, we test models with covariates affecting BMI values.
 
+## Check for linear associations.
+* Potential interesting continuous variables with linear relationship with AIC inlude **education_status, health_status, A1c, IL6, IL16, Leptin, IL23, Percent FD**. We will also attempt to include factor variables **family_w_diabetes, Race, and Transportation_type_for_food, and ACS latent classes**
+
+```{r}
+l <- list()
+i = 1
+for (value in names(combine_df_non_ACS_T)) {
+  l[[i]] <-  combine_df_non_ACS_T %>% ggplot(aes_string(x = value, y = 'bmi.T')) + geom_point()
+  i <- i+1
+}
+
+n <- length(l)
+nCol <- 5
+do.call("grid.arrange", c(l, ncol=nCol))
+```
+
+
+## BMI Modeling Strategy {.tabset}
+* There are N = 103 patients with interesting selected continuous variables (education_status, health_status, A1c, IL6, IL16, Leptin, IL23, Percent FD, family_w_diabetes, Race, and Transportation_type_for_food) with no missing values. 
+
+  * Model 1: BMI ~ bmi + education_status + health_status + HgA1c + IL_6 + IL_16 + Leptin + TNF_alpha.T + IL_23.T + Percent_of_tract_in_FD.T + family_w_diabetes + Race + Transportation_type_for_food (N = 103)
+
+### Model 1
+* IL_6, Leptin, White significant . 
+
+```{r}
+library(purrr)
+modeling_df <-compare_df_tranformed
+  
+modeling_df <- modeling_df %>% dplyr::select(bmi.T, education_status.T, health_status.T, HgA1c.T, IL_6.T, IL_16.T, Leptin.T, 
+                                             TNF_alpha.T, IL_23.T, Percent_of_tract_in_FD.T, family_w_diabetes, Race, Transportation_type_for_food)
+
+modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
+
+mod4 <- lm(bmi.T ~ ., modeling_df)
+mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4))
+```
+### Model 1 Elastic Net
+* Alternatively, since there is high levels of multi-colinearity in above model, lets run similar model with elastic net methodology. **IL_6, Leptin, and IL_23** selected . 
+
+```{r}
+library(glmnet)
+
+## Create modeling data
+X <- modeling_df 
+
+X2 <-  model.matrix(bmi.T ~ ., X)
+Y2 <- X$bmi.T
+
+
+# Create cv results df
+df1 = data.frame(
+    enum = integer(),
+    alpha = double(),
+    cvm.min = double(),
+    cvm.1se = double(),
+    lambda.min = double(),
+    lambda.1se = double())
+
+  # - select alpha and lambda via CV
+enum = 0
+for (alpha in c(0, 0.01, 0.1, 0.5, 1)) {
+  enum <-  enum + 1
+  fit <-  cv.glmnet(X2, Y2, family='gaussian', alpha=alpha, nfolds = 3)
+  cvm.min <-  fit$cvm[fit$lambda == fit$lambda.min]
+  cvm.1se <-  fit$cvm[fit$lambda == fit$lambda.1se]
+  lambda.min <-  fit$lambda.min
+  lambda.1se <-  fit$lambda.1se
+  
+  assign(paste("fit", enum, sep=""), fit)
+  
+  df1_temp <-  data.frame(enum, alpha, cvm.min, cvm.1se, lambda.min, lambda.1se)
+  
+  df1 <-  rbind(df1, df1_temp) }
+
+# - select model that minimizes CV error
+best.model <-  df1[df1$cvm.min==min(df1$cvm.min),]
+best.fit   <-  get(paste('fit', best.model$enum, sep=''))
+
+# extract non-zero coefficients from best model
+coef  <-  coef(best.fit, s=best.fit$lambda.min) ## uses lowest mse lambda
+coef2 <- coef(best.fit, s=best.fit$lambda.1se) ## uses 1 se larger from lowest mse lambda (recomended for more regularization)
+
+coef <-  data.frame(
+  vars   = coef@Dimnames[[1]][ which(coef != 0 ) ], 
+  val     = coef              [ which(coef != 0 ) ] ) %>% filter(vars != '(Intercept)')
+
+
+plot_min <- coef %>%
+  dplyr::rename('row' = 'vars', 'value' = 'val') %>%
+  ggplot(aes(value, reorder(row, value), color = value > 0.001)) +
+  geom_point(show.legend = FALSE) +
+  ggtitle("Selected Elastic-Net Influential Variables (Intercept Omitted)") +
+  xlab("Coefficient") +
+  ylab(NULL)
+
+most_sig <- coef %>% filter(abs(val) %in% tail(sort(abs(coef$val)), 10) )
+
+plot_most_sig <- most_sig %>%
+  dplyr::rename('row' = 'vars', 'value' = 'val') %>%
+  ggplot(aes(value, reorder(row, value), color = value > 0)) +
+  geom_point(show.legend = FALSE) +
+  ggtitle("Non-Zero Coeficients in Elastic Net Model") +
+  xlab("Coefficient") +
+  ylab(NULL)
+
+coef <- coef  %>% mutate(val = round(val, 6)) 
+
+return_this <- c()
+
+return_this$df1 <- df1
+return_this$plot_min <- plot_min
+return_this$coef <- coef %>% arrange(desc(val))
+
+return_this$plot_min
+```
+
+## {-}
+
+## A1c vs BMI Mapping 
 ```{r, include =  FALSE}
 library(rgdal)
 library(rgeos)
-shape <- readOGR('/Users/nickbachelder/Desktop/Duke Internship 2021/LA_Cohort_R01/tl_2021_us_zcta520', layer = 'tl_2021_us_zcta520')
+shape <- readOGR('/Users/nickbachelder/Desktop/Duke Internship 2021/LA_Cohort_R01/LA_A1C/tl_2021_us_zcta520', layer = 'tl_2021_us_zcta520')
 
-plot_df <- combine_df1 %>% dplyr::select(Curr_ZIP, Percent_of_tract_in_FD, HgA1c) %>% group_by(Curr_ZIP) %>% 
-  dplyr::summarize(Percent_of_tract_in_FD = max(Percent_of_tract_in_FD), HgA1c_mean = mean(HgA1c))
+plot_df <- combine_df1 %>% dplyr::select(Curr_ZIP, Percent_of_tract_in_FD, HgA1c, bmi) %>% group_by(Curr_ZIP) %>% 
+  dplyr::summarize(Percent_of_tract_in_FD = max(Percent_of_tract_in_FD), BMI_mean = mean(bmi), HgA1c_mean = mean(HgA1c))
 
-zips_use <- read_csv('/Users/nickbachelder/Desktop/Duke Internship 2021/LA_Cohort_R01/Zip_Codes_(LA_County).csv')$ZIP # LA county
+zips_use <- read_csv('/Users/nickbachelder/Desktop/Duke Internship 2021/LA_Cohort_R01/LA_A1C/Zip_Codes_(LA_County).csv')$ZIP # LA county
 
 
 shape@data$id <- rownames(shape@data)
@@ -516,23 +778,21 @@ shape <- shape[shape$ZCTA5CE20 %in% zips_use,]
 shape@data <- left_join(shape@data %>% dplyr::rename('Curr_ZIP' = 'ZCTA5CE20'), plot_df, by = 'Curr_ZIP')
 ```
 
-
 ```{r}
 library(viridis)
 shp_df <- fortify(shape)
 shp_df   <- left_join(shp_df %>% mutate(id = as.numeric(id)), shape@data %>% mutate(id = as.numeric(id)), by="id")
 
-plot_food_desert <- ggplot() + geom_polygon(data = shp_df, aes(x = long, y = lat, group = group, fill = Percent_of_tract_in_FD)) + theme_void() +
+plot_food_desert <- ggplot() + geom_polygon(data = shp_df, aes(x = long, y = lat, group = group, fill = HgA1c_mean)) + theme_void() +
   theme(legend.position="none") +
-  ggtitle('Food Desert Percentage')
+  ggtitle('Mean A1c Level')
 
 
-plot_A1C <- ggplot() + geom_polygon(data = shp_df, aes(x = long, y = lat, group = group, fill = HgA1c_mean)) + theme_void() +
-  theme(legend.position="none") + ggtitle('Mean A1C Level')
+plot_A1C <- ggplot() + geom_polygon(data = shp_df, aes(x = long, y = lat, group = group, fill = BMI_mean)) + theme_void() +
+  theme(legend.position="none") + ggtitle('Mean BMI Level')
 
 grid.arrange(plot_food_desert, plot_A1C, ncol=2)
 ```
-
 
 
 
