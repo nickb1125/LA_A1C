@@ -302,23 +302,32 @@ data.frame(unlist(lapply(numeric_final, get_value_shapiro))) %>% `colnames<-`('p
          )
 ```
 
-### apply box transform to all non-normal cytokine data, square root transform to all ACS
+### apply log transform to all non-normal cytokine data, square root transform to all ACS
 
 ```{r}
 non_normal_cols <- as.vector(unlist(lapply(numeric_final, get_value_shapiro))) < 0.05
 non_normal_ACS <- colnames(numeric_final[,non_normal_cols])[colnames(numeric_final[,non_normal_cols]) %in% names(ACS)]
 non_normal_non_ACS <- colnames(numeric_final[,non_normal_cols])[!(colnames(numeric_final[,non_normal_cols]) %in% names(ACS))]
 
-### Box transform
+### log transform
+
+# numeric_transformed <- numeric_final
+# 
+# for (col in non_normal_non_ACS) {
+#   x <- as.numeric(numeric_final[,col])
+#   x[x == 0] <- 0.000000001
+#   box <- boxcox(lm(x ~ 1), plot = F)
+#   lambda <- box$x[which.max(box$y)]
+#   new_x <- if (lambda == 0) {log(x)} else {(x^lambda - 1)/lambda}
+#   numeric_transformed[, paste0(col, '.T')] <- new_x
+# }
 
 numeric_transformed <- numeric_final
 
 for (col in non_normal_non_ACS) {
   x <- as.numeric(numeric_final[,col])
   x[x == 0] <- 0.000000001
-  box <- boxcox(lm(x ~ 1), plot = F)
-  lambda <- box$x[which.max(box$y)]
-  new_x <- if (lambda == 0) {log(x)} else {(x^lambda - 1)/lambda}
+  new_x <- log(x)
   numeric_transformed[, paste0(col, '.T')] <- new_x
 }
 
