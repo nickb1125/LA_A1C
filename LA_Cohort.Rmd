@@ -343,8 +343,6 @@ for (col in non_normal_ACS) {
 }
 
 numeric_transformed <- numeric_transformed %>% dplyr::select(-c(non_normal_ACS))
-
-numeric_transformed
 ```
 
 ```{r}

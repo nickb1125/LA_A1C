@@ -43,6 +43,8 @@ setwd(here())
 ```
 
 
+
+
 # Section: Data Cleaning Comments
 * Selected variables include **all cytokines, both CHiP variables, ZIP codes, the food desert variable**, and those **survey variables** which were convenient for modeling. All variables are summarized below.
 * Dietary weekly consumption variables (ie. servings of oil, tacos, etc) were grouped into more broad catagories (Surgar, Red Meats, Fatty Carbs, Dairy, Breads)
@@ -485,9 +487,12 @@ do.call("grid.arrange", c(l, ncol=nCol))
 ```{r}
 library(purrr)
 modeling_df <-compare_df_tranformed
+modeling_df$Transportation_type_for_food <- relevel(modeling_df$Transportation_type_for_food, ref = 'Car Only')
   
 modeling_df <- modeling_df %>% dplyr::select(HgA1c.T , Percent_of_tract_in_FD.T, CXCL1.T, family_w_diabetes, 
-                                             Transportation_type_for_food)
+                                             Transportation_type_for_food) %>% mutate(family_w_diabetes = case_when(family_w_diabetes == 1 ~ 'Yes',
+                                                                                                                    family_w_diabetes == 2 ~ 'No')) %>%
+  mutate(family_w_diabetes = as.factor(family_w_diabetes))
 
 modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
 
@@ -512,9 +517,13 @@ mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 3))
 * None significant in this cohort
 
 ```{r}
-modeling_df <- compare_df_tranformed %>% dplyr::select(HgA1c.T, us_born, Race)
+modeling_df <- compare_df_tranformed %>% dplyr::select(HgA1c.T, us_born, Race)  %>% mutate(us_born = case_when(us_born == 0 ~ 'No',
+                                                                                                               us_born == 1 ~ 'Yes')) %>%
+  mutate(us_born = as.factor(us_born))
 
-modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
+modeling_df$Race <- relevel(modeling_df$Race, ref = 'White')
+
+modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame() 
 
 mod4 <- lm(HgA1c.T ~ Race + us_born, modeling_df)
 mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 3))
@@ -676,8 +685,10 @@ do.call("grid.arrange", c(l, ncol=nCol))
 ## BMI Modeling Strategy {.tabset}
 * There are N = 103 patients with interesting selected continuous variables (education_status, health_status, A1c, IL6, IL16, Leptin, IL23, Percent FD, family_w_diabetes, Race, and Transportation_type_for_food) with no missing values. 
 
-  * Model 1: BMI ~ bmi + education_status + health_status + HgA1c + IL_6 + IL_16 + Leptin + TNF_alpha.T + IL_23.T + Percent_of_tract_in_FD.T + family_w_diabetes + Race + Transportation_type_for_food + white_prop.T + hispanic_prop.T + poverty_prop.T + female_householder_prop.T + fem_mgmt_prof_prop.T + male_mgmt_prof_prop.T +
+  * Model 1: BMI ~ education_status + health_status + HgA1c + IL_6 + IL_16 + Leptin + TNF_alpha.T + IL_23.T + Percent_of_tract_in_FD.T + family_w_diabetes + Race + Transportation_type_for_food + poverty_prop.T + female_householder_prop.T + fem_mgmt_prof_prop.T + male_mgmt_prof_prop.T +
                                              mgmt_prof_prop.T + crowded_prop.T + over_25_less_than_hs_grad_prop.T (N = 101)
+  *  Model 2: BMI ~ IL6_K9ac_ChIP.T + TNFa_K9ac_ChIP.T
+  
 
 ### Model 1
 * IL_6, Leptin, White significant . 
@@ -685,11 +696,16 @@ do.call("grid.arrange", c(l, ncol=nCol))
 ```{r}
 library(purrr)
 modeling_df <-compare_df_tranformed
+modeling_df$Race <- relevel(modeling_df$Race, ref = 'White')
   
 modeling_df <- modeling_df %>% dplyr::select(bmi.T, education_status.T, health_status.T, HgA1c.T, IL_6.T, IL_16.T, Leptin.T, 
-                                             TNF_alpha.T, IL_23.T, Percent_of_tract_in_FD.T, family_w_diabetes, Race, Transportation_type_for_food,
-                                             white_prop.T, hispanic_prop.T, poverty_prop.T, female_householder_prop.T, fem_mgmt_prof_prop.T, male_mgmt_prof_prop.T, 
-                                             mgmt_prof_prop.T, crowded_prop.T, over_25_less_than_hs_grad_prop.T)
+                                             TNF_alpha.T, IL_23.T, Percent_of_tract_in_FD.T, family_w_diabetes, Race, Transportation_type_for_food, poverty_prop.T,
+                                             female_householder_prop.T, fem_mgmt_prof_prop.T, male_mgmt_prof_prop.T, 
+                                             mgmt_prof_prop.T, crowded_prop.T, over_25_less_than_hs_grad_prop.T )%>% mutate(family_w_diabetes = case_when(family_w_diabetes == 1 ~ 'Yes',
+                                                                                                                    family_w_diabetes == 2 ~ 'No')) %>%
+  mutate(family_w_diabetes = as.factor(family_w_diabetes))
+
+modeling_df$Transportation_type_for_food <- relevel(modeling_df$Transportation_type_for_food, ref = 'Car Only')
 
 modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
 
@@ -699,7 +715,7 @@ mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 4))
 ### Model 1 Elastic Net
 * Alternatively, since there is high levels of multi-colinearity in above model, lets run similar model with elastic net methodology. **IL_6, Leptin, and IL_23** selected . 
 
-```{r}
+```{r, cache = T}
 library(glmnet)
 
 ## Create modeling data
@@ -776,6 +792,18 @@ return_this$coef <- coef %>% arrange(desc(val))
 return_this$plot_min
 ```
 
+
+### Model 2
+
+```{r}
+modeling_df <- numeric_transformed %>% dplyr::select(bmi.T, IL6_K9ac_ChIP.T, TNFa_K9ac_ChIP.T)
+
+modeling_df <- modeling_df[complete.cases(modeling_df),] %>% data.frame()
+
+mod4 <- lm(bmi.T ~ ., modeling_df)
+mod4 %>% tbl_regression(estimate_fun = purrr::partial(style_ratio, digits = 3))
+```
+
 ## {-}
 
 ## A1c vs BMI Mapping 
@@ -806,16 +834,18 @@ shape@data <- left_join(shape@data %>% dplyr::rename('Curr_ZIP' = 'ZCTA5CE20'), 
 library(ggpubr)
 library(viridis)
 shp_df <- fortify(shape)
-shp_df   <- left_join(shp_df %>% mutate(id = as.numeric(id)), shape@data %>% mutate(id = as.numeric(id)), by="id") %>% dplyr::rename('Normalized_Mean' = 'HgA1c_mean')
+shp_df   <- left_join(shp_df %>% mutate(id = as.numeric(id)), shape@data %>% mutate(id = as.numeric(id)), by="id") %>% dplyr::rename('Normalized_Mean' = 'HgA1c_mean') %>%
+  mutate(BMI_mean = ifelse(is.na(Normalized_Mean), NA, BMI_mean)) %>%
+  mutate(Normalized_Mean = ifelse(is.na(BMI_mean), NA, Normalized_Mean))
 
 plot_food_desert <- ggplot() + geom_polygon(data = shp_df, aes(x = long, y = lat, group = group, fill = Normalized_Mean)) + theme_void() +
-  ggtitle('Mean A1c Level') 
+  ggtitle('Mean A1c Level') + scale_fill_viridis()
 
 
 plot_A1C <- ggplot() + geom_polygon(data = shp_df, aes(x = long, y = lat, group = group, fill = BMI_mean)) + theme_void() +
-  ggtitle('Mean BMI Level')
+  ggtitle('Mean BMI Level') + scale_fill_viridis() 
 
-ggarrange(plot_food_desert, plot_A1C, ncol=2, common.legend = TRUE)
+ggarrange(plot_food_desert, plot_A1C, ncol=2, common.legend = TRUE) %>% annotate_figure(top = 'Mean A1c and BMI Levels in LA Counties')
 ```
 
 
